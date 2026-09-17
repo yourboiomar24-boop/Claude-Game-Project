@@ -73,3 +73,11 @@ Plugins/**/Intermediate/*
 
 # Cache files for the editor to use
 DerivedDataCache/*
+
+# Node / Vite (web game)
+node_modules/
+dist/
+.vite/
+*.log
+npm-debug.log*
+.DS_Store
