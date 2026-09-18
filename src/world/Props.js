@@ -41,7 +41,7 @@ function buildMetalCrate() {
   return g;
 }
 
-function buildChest() {
+export function buildChestMesh() {
   const g = new THREE.Group();
   const base = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.6, 0.75), chestMat);
   base.position.y = 0.3;
@@ -100,7 +100,7 @@ export class Chest {
 
 // Scatters trees/rocks/crates/chests across the island, avoiding water and
 // keeping a minimum spacing via simple rejection sampling.
-export function generateProps(terrain, { seed = 99, count = 260, chests = 40 } = {}) {
+export function generateProps(terrain, { seed = 99, count = 260, chests = 40, poiManager = null } = {}) {
   const rand = mulberry32(seed);
   const group = new THREE.Group();
   group.name = 'Props';
@@ -117,6 +117,7 @@ export function generateProps(terrain, { seed = 99, count = 260, chests = 40 } =
       const z = Math.sin(ang) * dist;
       const y = terrain.getHeightAt(x, z);
       if (y < 0.4) continue; // avoid water/shore
+      if (poiManager && poiManager.isInsidePOI(x, z)) continue; // leave landmark sectors clear
       let ok = true;
       for (const p of placed) {
         const dx = p.x - x, dz = p.z - z;
@@ -153,7 +154,7 @@ export function generateProps(terrain, { seed = 99, count = 260, chests = 40 } =
   for (let i = 0; i < chests; i++) {
     const pos = tryPlace(8);
     if (!pos) continue;
-    const mesh = buildChest();
+    const mesh = buildChestMesh();
     group.add(mesh);
     chestList.push(new Chest(mesh, pos));
   }

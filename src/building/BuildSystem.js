@@ -9,14 +9,18 @@ const _fwd = new THREE.Vector3();
 const _target = new THREE.Vector3();
 const _raycaster = new THREE.Raycaster();
 
-function cardinalFace(fwdXZ) {
+export function cardinalFace(fwdXZ) {
   if (Math.abs(fwdXZ.x) > Math.abs(fwdXZ.z)) return fwdXZ.x > 0 ? 'E' : 'W';
   return fwdXZ.z > 0 ? 'S' : 'N';
 }
 
-function cardinalAngle(fwdXZ) {
+export function cardinalAngle(fwdXZ) {
   const raw = THREE.MathUtils.radToDeg(Math.atan2(fwdXZ.x, fwdXZ.z));
   return Math.round(raw / 90) * 90;
+}
+
+export function worldToCell(x, y, z) {
+  return { ix: Math.round(x / TILE), iy: Math.round(y / TILE), iz: Math.round(z / TILE) };
 }
 
 export class BuildSystem {
@@ -172,9 +176,9 @@ export class BuildSystem {
     return neighbors.some(([ix, iy, iz]) => this._hasPieceInCell(ix, iy, iz));
   }
 
-  _isValidTarget(t) {
+  _isValidTarget(t, type = this.pieceType) {
     if (!t) return false;
-    const key = this._keyFor(this.pieceType, t);
+    const key = this._keyFor(type, t);
     if (this.pieces.has(key)) return false;
     if (!this._isGrounded(t)) return false;
     return true;
@@ -189,17 +193,23 @@ export class BuildSystem {
   // `inventory` ({wood, stone, metal}). Returns the placed piece or null.
   place(inventory) {
     if (!this.currentTarget || !this.ghostValid) return null;
-    const resType = RESOURCE_FOR_TIER[this.tier];
-    if ((inventory[resType] || 0) < PIECE_COST) return null;
+    return this._commitPlacement({ type: this.pieceType, tier: this.tier, ...this.currentTarget }, inventory);
+  }
 
-    const t = this.currentTarget;
-    const piece = new StructurePiece({
-      type: this.pieceType,
-      tier: this.tier,
-      ix: t.ix, iy: t.iy, iz: t.iz,
-      face: t.face,
-      facing: t.facing,
-    });
+  // Explicit-target placement used by bots (no camera/ghost involved): they
+  // compute their own target cell (e.g. facing an incoming shot) and call
+  // this directly. Runs the same grounding/overlap/cost checks as place().
+  placeAt({ type, tier, ix, iy, iz, face = null, facing = 0 }, inventory) {
+    const t = { ix, iy, iz, face, facing };
+    if (!this._isValidTarget(t, type)) return null;
+    const resType = RESOURCE_FOR_TIER[tier];
+    if ((inventory[resType] || 0) < PIECE_COST) return null;
+    return this._commitPlacement({ type, tier, ix, iy, iz, face, facing }, inventory);
+  }
+
+  _commitPlacement({ type, tier, ix, iy, iz, face, facing }, inventory) {
+    const resType = RESOURCE_FOR_TIER[tier];
+    const piece = new StructurePiece({ type, tier, ix, iy, iz, face, facing });
     inventory[resType] -= PIECE_COST;
 
     piece.onDestroyed = (p) => this._removePiece(p);

@@ -129,6 +129,17 @@ export class Player {
     this._updateCamera();
   }
 
+  // Phase 2 (battle bus): walking is disabled, but mouse look is fully free
+  // (no pitch/yaw lock) so the player can scan the map before jumping. The
+  // player rides at the bus's current world position each frame.
+  updateBusRide(dt, busPosition) {
+    this._handleLook(dt);
+    this.position.copy(busPosition);
+    this.velocity.set(0, 0, 0);
+    this.syncMeshToPosition();
+    this._updateCamera();
+  }
+
   currentWeapon() {
     return this.weaponSlots[this.activeSlot];
   }

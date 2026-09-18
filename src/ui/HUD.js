@@ -1,5 +1,6 @@
 import { MATERIAL_TIERS } from '../building/BuildConfig.js';
 import { RARITY_TIERS } from '../combat/Rarity.js';
+import { MinimapRadar, CompassBar } from './RadarHUD.js';
 
 const WEAPON_LABELS = {
   pickaxe: 'PICK',
@@ -28,6 +29,8 @@ export class HUD {
       <div class="damage-vignette" id="dmg-vignette"></div>
       <div class="hit-marker" id="hit-marker"></div>
 
+      <button class="fullscreen-btn" id="fullscreen-btn" title="Toggle fullscreen">⛶ Fullscreen</button>
+
       <!-- Bottom-center: health (green) + shield (blue) -->
       <div class="center-bars">
         <div class="bar-label">HEALTH</div>
@@ -50,7 +53,6 @@ export class HUD {
         <div class="storm-timer" id="storm-timer">Storm closing in 20s</div>
       </div>
 
-      <div id="minimap"><canvas id="minimap-canvas" width="168" height="168"></canvas></div>
       <div class="kill-feed" id="kill-feed"></div>
       <div class="pickup-toast" id="pickup-toast"></div>
       <div class="interact-hint" id="interact-hint"></div>
@@ -70,7 +72,6 @@ export class HUD {
       buildBar: root.querySelector('#build-hotbar'),
       playersLeft: root.querySelector('#players-left'),
       stormTimer: root.querySelector('#storm-timer'),
-      minimapCanvas: root.querySelector('#minimap-canvas'),
       killFeed: root.querySelector('#kill-feed'),
       hitMarker: root.querySelector('#hit-marker'),
       dmgVignette: root.querySelector('#dmg-vignette'),
@@ -80,8 +81,11 @@ export class HUD {
       chestProgressFill: root.querySelector('#chest-progress-fill'),
       lobbyCountdown: root.querySelector('#lobby-countdown'),
       dropPrompt: root.querySelector('#drop-prompt'),
+      fullscreenBtn: root.querySelector('#fullscreen-btn'),
     };
-    this.mmCtx = this.els.minimapCanvas.getContext('2d');
+
+    this.radar = new MinimapRadar(root);
+    this.compass = new CompassBar(root);
 
     for (const [type, def] of Object.entries(MATERIAL_TIERS)) {
       const chip = document.createElement('div');
@@ -90,6 +94,10 @@ export class HUD {
       chip.innerHTML = `<div class="mat-swatch" style="background:#${def.color.toString(16).padStart(6, '0')}"></div><span class="mat-value">0</span>`;
       this.els.materials.appendChild(chip);
     }
+  }
+
+  onFullscreenClick(handler) {
+    this.els.fullscreenBtn.addEventListener('click', handler);
   }
 
   setHealthShield(health, maxHealth, shield, maxShield) {
@@ -202,43 +210,11 @@ export class HUD {
     }
   }
 
-  drawMinimap({ playerPos, mapRadius, storm, safeRadius }) {
-    const ctx = this.mmCtx;
-    const size = 168;
-    ctx.clearRect(0, 0, size, size);
-    ctx.fillStyle = '#0f1522';
-    ctx.fillRect(0, 0, size, size);
+  drawMinimap({ playerPos, playerYaw, mapRadius, storm, bots }) {
+    this.radar.update({ playerPos, playerYaw, mapRadius, storm, bots });
+  }
 
-    const scale = (size * 0.46) / mapRadius;
-    const cx = size / 2, cy = size / 2;
-
-    // Island outline
-    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
-    ctx.beginPath();
-    ctx.arc(cx, cy, mapRadius * scale, 0, Math.PI * 2);
-    ctx.stroke();
-
-    // Storm safe zone
-    if (storm) {
-      ctx.strokeStyle = '#53d8ff';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(cx + storm.center.x * scale, cy + storm.center.y * scale, storm.radius * scale, 0, Math.PI * 2);
-      ctx.stroke();
-      if (storm.nextRadius !== undefined && storm.state === 'calm') {
-        ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-        ctx.setLineDash([3, 3]);
-        ctx.beginPath();
-        ctx.arc(cx + storm.nextCenter.x * scale, cy + storm.nextCenter.y * scale, storm.nextRadius * scale, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
-    }
-
-    // Player marker
-    ctx.fillStyle = '#ffd94a';
-    ctx.beginPath();
-    ctx.arc(cx + playerPos.x * scale, cy + playerPos.z * scale, 4, 0, Math.PI * 2);
-    ctx.fill();
+  updateCompass(camera) {
+    this.compass.updateFromCamera(camera);
   }
 }

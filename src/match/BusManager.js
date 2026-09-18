@@ -44,8 +44,9 @@ function buildBusMesh() {
 }
 
 // Phase 2: the Battle Bus flies a straight route across the map at a fixed
-// altitude. The camera cinematically tracks it; the player rides along
-// (walking disabled) until they jump or the bus reaches the far edge.
+// altitude. Walking is disabled, but the player keeps full mouse look (see
+// Player.updateBusRide) to scan the landscape before jumping or the bus
+// reaching the far edge.
 export class BusManager {
   constructor(scene, mapRadius) {
     this.scene = scene;
@@ -81,16 +82,6 @@ export class BusManager {
     this.t = Math.min(1, this.t + dt / this.duration);
     this.mesh.position.lerpVectors(this.start, this.end, this.t);
     return this.t >= 1;
-  }
-
-  // Automatic cinematic chase camera — the player doesn't steer it.
-  updateCamera(camera) {
-    const pos = this.mesh.position;
-    const behind = pos.clone().addScaledVector(this.forward, -13).add(new THREE.Vector3(0, 4.5, 0));
-    camera.position.copy(behind);
-    camera.lookAt(pos.clone().addScaledVector(this.forward, 12));
-    camera.fov = 65;
-    camera.updateProjectionMatrix();
   }
 
   dispose() {

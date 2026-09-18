@@ -6,19 +6,24 @@ import { Terrain } from './world/Terrain.js';
 import { generateProps } from './world/Props.js';
 import { Storm, buildStormVisual } from './world/Storm.js';
 import { spawnChestLoot } from './world/Loot.js';
+import { POIManager } from './world/POIManager.js';
 import { BuildSystem } from './building/BuildSystem.js';
 import { CombatSystem } from './combat/CombatSystem.js';
 import { RARITY_TIERS } from './combat/Rarity.js';
 import { Player } from './entities/Player.js';
 import { Bot } from './entities/Bot.js';
 import { getSkinById, SKINS } from './skins/skins.js';
-import { MainMenu } from './ui/MainMenu.js';
+import { MenuTabs } from './ui/MenuTabs.js';
 import { HUD } from './ui/HUD.js';
 import { EditOverlay } from './ui/EditOverlay.js';
 import { GameOverScreen } from './ui/GameOverScreen.js';
 import { LobbyManager } from './match/LobbyManager.js';
 import { BusManager } from './match/BusManager.js';
 import { SkydiveManager } from './match/SkydiveManager.js';
+import { AudioManager } from './audio/AudioManager.js';
+import { computeMatchXp } from './progression/BattlePass.js';
+
+const SCAVENGE_WINDOW_SECONDS = 30;
 
 const app = document.getElementById('app');
 const canvas = document.getElementById('game-canvas');
@@ -38,7 +43,13 @@ const input = new InputManager(canvas);
 const hud = new HUD(app);
 const editOverlay = new EditOverlay(app);
 const gameOverScreen = new GameOverScreen(app, () => menu.show());
+const audioManager = new AudioManager();
 hud.root.style.display = 'none';
+
+hud.onFullscreenClick(() => {
+  if (!document.fullscreenElement) document.documentElement.requestFullscreen?.();
+  else document.exitFullscreen?.();
+});
 
 function resize() {
   const w = window.innerWidth, h = window.innerHeight;
@@ -47,6 +58,7 @@ function resize() {
   camera.updateProjectionMatrix();
 }
 window.addEventListener('resize', resize);
+document.addEventListener('fullscreenchange', resize);
 resize();
 
 function setupLighting(target) {
@@ -74,16 +86,19 @@ function disposeObject3D(root) {
     if (obj.geometry) obj.geometry.dispose();
     if (obj.material) {
       const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-      for (const m of mats) m.dispose();
+      for (const m of mats) {
+        if (m.map) m.map.dispose();
+        m.dispose();
+      }
     }
   });
 }
 
 // ---------------------------------------------------------------------
 // Match setup — builds the full combat-phase world up front (terrain,
-// props, storm, building, combat) plus the lobby island, then starts the
-// match in the 'lobby' phase. The bus/skydive managers are created lazily
-// when their phase begins.
+// POIs, props, storm, building, combat) plus the lobby island, then starts
+// the match in the 'lobby' phase. The bus/skydive managers are created
+// lazily when their phase begins.
 // ---------------------------------------------------------------------
 function startMatch({ skinId, botCount }) {
   while (scene.children.length) {
@@ -97,8 +112,13 @@ function startMatch({ skinId, botCount }) {
   const terrain = new Terrain({ radius: 150, segments: 170, seed: Math.floor(Math.random() * 100000) });
   scene.add(terrain.group);
 
-  const props = generateProps(terrain, { seed: Math.floor(Math.random() * 100000), count: 260, chests: 42 });
+  const poiManager = new POIManager(scene, terrain, Math.floor(Math.random() * 100000));
+
+  const props = generateProps(terrain, { seed: Math.floor(Math.random() * 100000), count: 260, chests: 42, poiManager });
   scene.add(props.group);
+
+  const chests = [...props.chests, ...poiManager.chests];
+  const pickups = [];
 
   const storm = new Storm({ mapRadius: terrain.radius, seed: Math.floor(Math.random() * 100000) });
   const stormVisual = buildStormVisual(terrain.radius);
@@ -115,6 +135,14 @@ function startMatch({ skinId, botCount }) {
     getStructureMeshes: () => buildSystem.getStructureMeshes(),
     getCharacters: () => characters,
     getResourceMeshes: () => props.resourceNodes.filter((n) => n.alive).map((n) => n.mesh),
+    getChests: () => chests,
+    getPickups: () => pickups,
+    removePickup: (pk) => {
+      pk.collected = true;
+      scene.remove(pk.mesh);
+      const idx = pickups.indexOf(pk);
+      if (idx >= 0) pickups.splice(idx, 1);
+    },
   };
 
   const combatSystem = new CombatSystem(scene, world);
@@ -166,23 +194,31 @@ function startMatch({ skinId, botCount }) {
 
   match = {
     phase: 'lobby',
-    terrain, props, storm, stormVisual, buildSystem, combatSystem,
+    terrain, props, poiManager, chests, pickups, storm, stormVisual, buildSystem, combatSystem,
     player, bots, characters, world, totalPlayers,
     lobby, bus: null, skydive: null,
-    pickups: [],
     chestHold: { chest: null, timer: 0 },
     cinematic: null,
+    combatTime: 0,
+    survivalTimer: 0,
     ended: false,
   };
 }
 
 function endMatchTo(win, placement, total) {
+  const kills = match.player.kills;
+  const survivalSeconds = match.survivalTimer;
+  menu.addBattlePassXp(computeMatchXp({ kills, survivalSeconds, won: win }));
+  menu.recordMatchResult({ kills, won: win });
+
   input.setEnabled(false);
   document.exitPointerLock?.();
   hud.setLobbyCountdown(null);
   hud.setDropPromptVisible(false);
   hud.setChestProgress(null);
   hud.setInteractHint(null);
+  audioManager.stopAll();
+  if (win) audioManager.playVictoryFanfare();
   gameOverScreen.show(win, placement, total);
 }
 
@@ -204,24 +240,21 @@ function startBusPhase() {
   match.phase = 'bus';
   hud.setLobbyCountdown(null);
   hud.setDropPromptVisible(true);
+  audioManager.playBusDrone();
 
   const bus = new BusManager(scene, match.terrain.radius);
   match.bus = bus;
 
   for (const bot of match.bots) bot.mesh.visible = false;
-
-  bus.mesh.add(match.player.mesh);
-  match.player.mesh.position.set(0, 1.4, 0.5);
-  match.player.mesh.rotation.y = 0;
 }
 
 // ---------------------------------------------------------------------
-// Phase 2: The Battle Bus
+// Phase 2: The Battle Bus — free-look riding, no locked camera.
 // ---------------------------------------------------------------------
 function updateBusPhase(dt) {
-  const { bus } = match;
+  const { bus, player } = match;
   const reachedEdge = bus.update(dt);
-  bus.updateCamera(camera);
+  player.updateBusRide(dt, bus.getPosition());
   if (input.wasPressed('Space') || reachedEdge) {
     startSkydivePhase();
   }
@@ -232,15 +265,13 @@ function startSkydivePhase() {
   const dropPos = bus.getPosition().clone().add(new THREE.Vector3(0, 1.5, 0));
   const dropVel = bus.getDropVelocity();
 
-  bus.mesh.remove(match.player.mesh);
-  scene.add(match.player.mesh);
-
   match.skydive = new SkydiveManager(match.player, match.terrain);
   match.skydive.start(dropPos, dropVel);
+  audioManager.playWindRush();
 
   for (const bot of match.bots) {
     bot.mesh.visible = true;
-    bot.startDrop(dropPos, match.terrain, bot._rand);
+    bot.startDrop(dropPos, match.terrain, bot._rand, match.poiManager.pois);
   }
 
   bus.dispose();
@@ -258,6 +289,7 @@ function updateSkydivePhase(dt) {
     if (bot.isDead) continue;
     bot.updateDrop(dt);
   }
+  match.poiManager.update(match.player.position.y);
   hud.setHealthShield(match.player.health, match.player.maxHealth, match.player.shield, match.player.maxShield);
   if (landed) startCombatPhase();
 }
@@ -267,6 +299,8 @@ function startCombatPhase() {
   match.skydive = null;
   match.player.velocity.set(0, 0, 0);
   match.phase = 'combat';
+  match.combatTime = 0;
+  audioManager.stopAll();
 }
 
 // ---------------------------------------------------------------------
@@ -275,7 +309,7 @@ function startCombatPhase() {
 function updateChestInteraction(dt) {
   const { player } = match;
   let nearestChest = null, nearestDist = 2.4;
-  for (const chest of match.props.chests) {
+  for (const chest of match.chests) {
     if (chest.opened) continue;
     const d = player.position.distanceTo(chest.mesh.position);
     if (d < nearestDist) { nearestChest = chest; nearestDist = d; }
@@ -343,8 +377,12 @@ function updatePickups(dt) {
 }
 
 function updateCombatPhase(dt) {
-  const { player, bots, storm, stormVisual, buildSystem, combatSystem, terrain, characters, totalPlayers } = match;
+  const { player, bots, storm, stormVisual, buildSystem, combatSystem, terrain, characters } = match;
   if (player.isDead) return;
+
+  match.combatTime += dt;
+  match.survivalTimer += dt;
+  const scavengeExpired = match.combatTime >= SCAVENGE_WINDOW_SECONDS;
 
   storm.update(dt);
   stormVisual.wall.position.set(storm.center.x, 25, storm.center.y);
@@ -360,10 +398,11 @@ function updateCombatPhase(dt) {
   player.update(dt);
   updateChestInteraction(dt);
   updatePickups(dt);
+  match.poiManager.update(player.position.y);
 
   for (const bot of bots) {
     if (bot.isDead) continue;
-    bot.update(dt, characters);
+    bot.update(dt, characters, scavengeExpired);
   }
 
   for (let i = bots.length - 1; i >= 0; i--) {
@@ -394,7 +433,7 @@ function updateCombatPhase(dt) {
   if (storm.state === 'calm') hud.setStormTimer(`Storm closes in ${Math.ceil(storm.timeUntilShrink())}s`);
   else if (storm.state === 'shrinking') hud.setStormTimer('Storm is closing!');
   else hud.setStormTimer('Final circle');
-  hud.drawMinimap({ playerPos: player.position, mapRadius: terrain.radius, storm, safeRadius: storm.radius });
+  hud.drawMinimap({ playerPos: player.position, playerYaw: player.yaw, mapRadius: terrain.radius, storm, bots });
 
   if (bots.length === 0 && !match.ended) {
     match.phase = 'victory';
@@ -445,10 +484,11 @@ function frame() {
     case 'combat': updateCombatPhase(dt); break;
     case 'victory': updateVictoryCinematic(dt); break;
   }
+  hud.updateCompass(camera);
   input.endFrame();
   renderer.render(scene, camera);
 }
 
-const menu = new MainMenu(app, (opts) => startMatch(opts));
+const menu = new MenuTabs(app, { onPlay: (opts) => startMatch(opts), audioManager });
 
 requestAnimationFrame(frame);
