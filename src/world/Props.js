@@ -8,6 +8,9 @@ const metalMat = new THREE.MeshStandardMaterial({ color: 0x9aa4ad, roughness: 0.
 const chestMat = new THREE.MeshStandardMaterial({ color: 0x8a5a2b, roughness: 0.6 });
 const chestGlowMat = new THREE.MeshStandardMaterial({ color: 0xffd94a, emissive: 0xffd94a, emissiveIntensity: 0.8 });
 
+// Shadow casting is deliberately limited to the tree trunk (not all 3
+// foliage cones) — with 260 scattered props, every extra shadow-casting
+// mesh multiplies the cost of the shadow-map render pass every frame.
 function buildTree() {
   const g = new THREE.Group();
   const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.32, 2.6, 7), trunkMat);
@@ -17,7 +20,6 @@ function buildTree() {
   for (let i = 0; i < 3; i++) {
     const foliage = new THREE.Mesh(new THREE.ConeGeometry(1.4 - i * 0.3, 1.7, 8), treeMat);
     foliage.position.y = 2.6 + i * 1.1;
-    foliage.castShadow = true;
     g.add(foliage);
   }
   return g;
@@ -27,7 +29,6 @@ function buildRock(scale = 1) {
   const geo = new THREE.IcosahedronGeometry(0.9 * scale, 0);
   const rock = new THREE.Mesh(geo, rockMat);
   rock.scale.y = 0.7;
-  rock.castShadow = true;
   rock.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, 0);
   return rock;
 }
@@ -36,7 +37,6 @@ function buildMetalCrate() {
   const g = new THREE.Group();
   const box = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.4, 1.6), metalMat);
   box.position.y = 0.7;
-  box.castShadow = true;
   g.add(box);
   return g;
 }
@@ -45,15 +45,13 @@ export function buildChestMesh() {
   const g = new THREE.Group();
   const base = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.6, 0.75), chestMat);
   base.position.y = 0.3;
-  base.castShadow = true;
   const lid = new THREE.Mesh(new THREE.BoxGeometry(1.12, 0.25, 0.78), chestMat);
   lid.position.y = 0.72;
-  lid.castShadow = true;
-  const glow = new THREE.PointLight(0xffd94a, 1.2, 6);
-  glow.position.y = 1.2;
+  // Glow via emissive material only — no real-time PointLight. Dozens of
+  // chests each casting a dynamic light was a major frame-rate sink.
   const lock = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.18, 0.1), chestGlowMat);
   lock.position.set(0, 0.45, 0.4);
-  g.add(base, lid, glow, lock);
+  g.add(base, lid, lock);
   g.userData.lid = lid;
   return g;
 }

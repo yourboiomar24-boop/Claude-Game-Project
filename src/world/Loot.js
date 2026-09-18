@@ -35,17 +35,13 @@ export class Pickup {
     this.baseY = position.y + 0.5;
     this._bob = Math.random() * Math.PI * 2;
 
+    // Glow comes from each mesh's own emissive material — no real-time
+    // PointLight per pickup, which added up fast (dozens on the ground at once).
     this.mesh = kind === 'weapon' ? buildWeaponPickupMesh(payload.rarity)
       : kind === 'ammo' ? buildAmmoPickupMesh()
       : buildShieldPickupMesh();
     this.mesh.position.copy(position);
     this.mesh.position.y = this.baseY;
-
-    const light = new THREE.PointLight(
-      kind === 'weapon' ? RARITY_TIERS[payload.rarity].color : kind === 'shield' ? 0x53d8ff : 0xd9a441,
-      0.6, 3
-    );
-    this.mesh.add(light);
   }
 
   update(dt) {

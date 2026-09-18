@@ -29,9 +29,9 @@ const app = document.getElementById('app');
 const canvas = document.getElementById('game-canvas');
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = THREE.PCFShadowMap;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x8fc7e8);
@@ -67,7 +67,7 @@ function setupLighting(target) {
   const sun = new THREE.DirectionalLight(0xfff3d6, 1.6);
   sun.position.set(80, 120, 40);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.mapSize.set(1280, 1280);
   sun.shadow.camera.left = -160;
   sun.shadow.camera.right = 160;
   sun.shadow.camera.top = 160;
@@ -109,12 +109,12 @@ function startMatch({ skinId, botCount }) {
 
   setupLighting(scene);
 
-  const terrain = new Terrain({ radius: 150, segments: 170, seed: Math.floor(Math.random() * 100000) });
+  const terrain = new Terrain({ radius: 150, segments: 110, seed: Math.floor(Math.random() * 100000) });
   scene.add(terrain.group);
 
   const poiManager = new POIManager(scene, terrain, Math.floor(Math.random() * 100000));
 
-  const props = generateProps(terrain, { seed: Math.floor(Math.random() * 100000), count: 260, chests: 42, poiManager });
+  const props = generateProps(terrain, { seed: Math.floor(Math.random() * 100000), count: 170, chests: 34, poiManager });
   scene.add(props.group);
 
   const chests = [...props.chests, ...poiManager.chests];

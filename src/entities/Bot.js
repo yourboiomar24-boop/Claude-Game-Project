@@ -79,6 +79,11 @@ export class Bot {
     this.strafeDir = rand() > 0.5 ? 1 : -1;
     this.strafeTimer = 2 + rand() * 2;
 
+    // Full target-acquisition scans (O(characters) line-of-sight raycasts)
+    // are throttled and staggered per-bot rather than run every frame.
+    this._scanTimer = rand() * 0.25;
+    this._lastSpotted = null;
+
     this.hasBeenDamaged = false;
     this.reactionTarget = null;
     this.reactionTimer = 0;
@@ -466,7 +471,15 @@ export class Bot {
     if (this.isDead) return;
 
     // Target acquisition with a human-like reaction delay before engaging.
-    const spotted = this._findTarget(characters);
+    // The expensive O(characters) line-of-sight scan itself is throttled;
+    // an already-engaged target is still re-checked every frame elsewhere.
+    this._scanTimer -= dt;
+    if (this._scanTimer <= 0) {
+      this._lastSpotted = this._findTarget(characters);
+      this._scanTimer = 0.2 + this._rand() * 0.1;
+    }
+    let spotted = this._lastSpotted;
+    if (spotted && spotted.isDead) { spotted = null; this._lastSpotted = null; }
     if (spotted) {
       if (this.reactionTarget !== spotted) {
         this.reactionTarget = spotted;
