@@ -30,9 +30,10 @@ export class MainMenu {
           </div>
           <button id="play-btn">Drop In</button>
           <div class="menu-hint">
-            WASD move · Space jump · Shift sprint · Mouse look/shoot<br/>
-            1 Pickaxe · 2-5 Weapons · 6-9 Build (Wall/Floor/Ramp/Roof)<br/>
-            T switch material · F edit structure · R reload
+            Lobby → Battle Bus → Skydive → Combat<br/>
+            WASD move · Space jump/drop · Shift sprint · Mouse look/shoot<br/>
+            1 Pickaxe · 2-5 Weapons · 6-8 Build (Wall/Floor/Ramp)<br/>
+            T switch material · F edit structure · E open chest · R reload
           </div>
         </div>
       </div>

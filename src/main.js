@@ -5,16 +5,20 @@ import { InputManager } from './core/InputManager.js';
 import { Terrain } from './world/Terrain.js';
 import { generateProps } from './world/Props.js';
 import { Storm, buildStormVisual } from './world/Storm.js';
+import { spawnChestLoot } from './world/Loot.js';
 import { BuildSystem } from './building/BuildSystem.js';
 import { CombatSystem } from './combat/CombatSystem.js';
+import { RARITY_TIERS } from './combat/Rarity.js';
 import { Player } from './entities/Player.js';
 import { Bot } from './entities/Bot.js';
 import { getSkinById, SKINS } from './skins/skins.js';
-import { WEAPONS, rollLootWeapon } from './combat/Weapons.js';
 import { MainMenu } from './ui/MainMenu.js';
 import { HUD } from './ui/HUD.js';
 import { EditOverlay } from './ui/EditOverlay.js';
 import { GameOverScreen } from './ui/GameOverScreen.js';
+import { LobbyManager } from './match/LobbyManager.js';
+import { BusManager } from './match/BusManager.js';
+import { SkydiveManager } from './match/SkydiveManager.js';
 
 const app = document.getElementById('app');
 const canvas = document.getElementById('game-canvas');
@@ -75,6 +79,12 @@ function disposeObject3D(root) {
   });
 }
 
+// ---------------------------------------------------------------------
+// Match setup — builds the full combat-phase world up front (terrain,
+// props, storm, building, combat) plus the lobby island, then starts the
+// match in the 'lobby' phase. The bus/skydive managers are created lazily
+// when their phase begins.
+// ---------------------------------------------------------------------
 function startMatch({ skinId, botCount }) {
   while (scene.children.length) {
     const child = scene.children[0];
@@ -100,6 +110,7 @@ function startMatch({ skinId, botCount }) {
   const world = {
     buildSystem,
     storm,
+    terrain,
     terrainMesh: terrain.mesh,
     getStructureMeshes: () => buildSystem.getStructureMeshes(),
     getCharacters: () => characters,
@@ -108,11 +119,15 @@ function startMatch({ skinId, botCount }) {
 
   const combatSystem = new CombatSystem(scene, world);
 
+  const lobby = new LobbyManager(scene);
+
   const player = new Player({ scene, camera, input, skin: getSkinById(skinId), world, combatSystem });
-  const spawnAngle = Math.random() * Math.PI * 2;
-  const spawnDist = terrain.radius * 0.5;
-  player.spawnAt(Math.cos(spawnAngle) * spawnDist, Math.sin(spawnAngle) * spawnDist);
+  const playerSpawn = lobby.getSpawnPoint(0, botCount + 1);
+  player.setPosition(playerSpawn.x, playerSpawn.y, playerSpawn.z);
   characters.push(player);
+
+  player.onEditEnter = (piece) => editOverlay.open(piece);
+  player.onEditExit = (piece) => editOverlay.commit(piece);
 
   const bots = [];
   const usedSkinIdx = new Set();
@@ -121,9 +136,9 @@ function startMatch({ skinId, botCount }) {
     do { skinIdx = Math.floor(Math.random() * SKINS.length); } while (SKINS.length > botCount && usedSkinIdx.has(skinIdx) && usedSkinIdx.size < SKINS.length);
     usedSkinIdx.add(skinIdx);
     const bot = new Bot({ scene, skin: SKINS[skinIdx], world, combatSystem, seed: Math.floor(Math.random() * 1e9) });
-    const ang = Math.random() * Math.PI * 2;
-    const dist = Math.random() * terrain.radius * 0.85;
-    bot.spawnAt(Math.cos(ang) * dist, Math.sin(ang) * dist);
+    const spawn = lobby.getSpawnPoint(i + 1, botCount + 1);
+    bot.position.copy(spawn);
+    bot.mesh.position.copy(spawn);
     bots.push(bot);
     characters.push(bot);
   }
@@ -132,9 +147,14 @@ function startMatch({ skinId, botCount }) {
 
   input.setEnabled(true);
   hud.root.style.display = 'block';
+  hud.setHealthShield(player.health, player.maxHealth, player.shield, player.maxShield);
+  hud.setMaterials(player.inventory, buildSystem.tier);
+  hud.setWeaponSlots(player.weaponSlots, player.activeSlot);
+  hud.setBuildSlots(['wall', 'floor', 'ramp'], null);
+  hud.setPlayersLeft(totalPlayers);
 
   player.onToast = (text) => hud.showToast(text);
-  player.onFire = (kind, meta) => {
+  player.onFire = (kind) => {
     if (kind === 'hit') hud.showHitMarker();
     if (kind === 'damaged') hud.flashDamage(1);
   };
@@ -145,8 +165,13 @@ function startMatch({ skinId, botCount }) {
   };
 
   match = {
+    phase: 'lobby',
     terrain, props, storm, stormVisual, buildSystem, combatSystem,
     player, bots, characters, world, totalPlayers,
+    lobby, bus: null, skydive: null,
+    pickups: [],
+    chestHold: { chest: null, timer: 0 },
+    cinematic: null,
     ended: false,
   };
 }
@@ -154,26 +179,254 @@ function startMatch({ skinId, botCount }) {
 function endMatchTo(win, placement, total) {
   input.setEnabled(false);
   document.exitPointerLock?.();
+  hud.setLobbyCountdown(null);
+  hud.setDropPromptVisible(false);
+  hud.setChestProgress(null);
+  hud.setInteractHint(null);
   gameOverScreen.show(win, placement, total);
 }
 
-function rollChestLoot(player, hud) {
-  const weaponId = rollLootWeapon();
-  const def = WEAPONS[weaponId];
-  const gotWeapon = player.pickupWeapon(weaponId);
-  if (gotWeapon) hud.showToast(`Found ${def.name}`);
-  else player.addAmmo(def.ammoType, def.magSize * 2);
+// ---------------------------------------------------------------------
+// Phase 1: Lobby
+// ---------------------------------------------------------------------
+function updateLobbyPhase(dt) {
+  const { player, lobby } = match;
+  player.updateLobby(dt, lobby);
+  const ready = lobby.update(dt);
+  hud.setLobbyCountdown(lobby.countdown);
+  hud.setHealthShield(player.health, player.maxHealth, player.shield, player.maxShield);
+  if (ready) startBusPhase();
+}
 
-  const matAmount = 20 + Math.floor(Math.random() * 40);
-  const matType = ['wood', 'stone', 'metal'][Math.floor(Math.random() * 3)];
-  player.addMaterials(matType, matAmount);
+function startBusPhase() {
+  match.lobby.dispose();
+  match.lobby = null;
+  match.phase = 'bus';
+  hud.setLobbyCountdown(null);
+  hud.setDropPromptVisible(true);
 
-  if (Math.random() < 0.3) {
-    player.shield = Math.min(player.maxShield, player.shield + 50);
-    hud.showToast('Shield +50');
+  const bus = new BusManager(scene, match.terrain.radius);
+  match.bus = bus;
+
+  for (const bot of match.bots) bot.mesh.visible = false;
+
+  bus.mesh.add(match.player.mesh);
+  match.player.mesh.position.set(0, 1.4, 0.5);
+  match.player.mesh.rotation.y = 0;
+}
+
+// ---------------------------------------------------------------------
+// Phase 2: The Battle Bus
+// ---------------------------------------------------------------------
+function updateBusPhase(dt) {
+  const { bus } = match;
+  const reachedEdge = bus.update(dt);
+  bus.updateCamera(camera);
+  if (input.wasPressed('Space') || reachedEdge) {
+    startSkydivePhase();
   }
 }
 
+function startSkydivePhase() {
+  const bus = match.bus;
+  const dropPos = bus.getPosition().clone().add(new THREE.Vector3(0, 1.5, 0));
+  const dropVel = bus.getDropVelocity();
+
+  bus.mesh.remove(match.player.mesh);
+  scene.add(match.player.mesh);
+
+  match.skydive = new SkydiveManager(match.player, match.terrain);
+  match.skydive.start(dropPos, dropVel);
+
+  for (const bot of match.bots) {
+    bot.mesh.visible = true;
+    bot.startDrop(dropPos, match.terrain, bot._rand);
+  }
+
+  bus.dispose();
+  match.bus = null;
+  match.phase = 'skydive';
+  hud.setDropPromptVisible(false);
+}
+
+// ---------------------------------------------------------------------
+// Phase 3: Skydiving & gliding
+// ---------------------------------------------------------------------
+function updateSkydivePhase(dt) {
+  const landed = match.skydive.update(dt);
+  for (const bot of match.bots) {
+    if (bot.isDead) continue;
+    bot.updateDrop(dt);
+  }
+  hud.setHealthShield(match.player.health, match.player.maxHealth, match.player.shield, match.player.maxShield);
+  if (landed) startCombatPhase();
+}
+
+function startCombatPhase() {
+  match.skydive.dispose();
+  match.skydive = null;
+  match.player.velocity.set(0, 0, 0);
+  match.phase = 'combat';
+}
+
+// ---------------------------------------------------------------------
+// Phase 4: Combat (storm, building, bots, loot)
+// ---------------------------------------------------------------------
+function updateChestInteraction(dt) {
+  const { player } = match;
+  let nearestChest = null, nearestDist = 2.4;
+  for (const chest of match.props.chests) {
+    if (chest.opened) continue;
+    const d = player.position.distanceTo(chest.mesh.position);
+    if (d < nearestDist) { nearestChest = chest; nearestDist = d; }
+  }
+
+  if (!nearestChest) {
+    match.chestHold.chest = null;
+    match.chestHold.timer = 0;
+    hud.setChestProgress(null);
+    hud.setInteractHint(null);
+    return;
+  }
+
+  if (input.isDown('KeyE')) {
+    if (match.chestHold.chest !== nearestChest) {
+      match.chestHold.chest = nearestChest;
+      match.chestHold.timer = 0;
+    }
+    match.chestHold.timer += dt;
+    hud.setInteractHint(null);
+    hud.setChestProgress(Math.min(1, match.chestHold.timer / 1.5));
+
+    if (match.chestHold.timer >= 1.5) {
+      nearestChest.open();
+      const drops = spawnChestLoot(nearestChest.mesh.position, Math.random);
+      for (const p of drops) scene.add(p.mesh);
+      match.pickups.push(...drops);
+      hud.showToast('Supply chest opened!');
+      match.chestHold.chest = null;
+      match.chestHold.timer = 0;
+      hud.setChestProgress(null);
+    }
+  } else {
+    match.chestHold.chest = null;
+    match.chestHold.timer = 0;
+    hud.setChestProgress(null);
+    hud.setInteractHint('Hold E to open supply chest');
+  }
+}
+
+function updatePickups(dt) {
+  const { player, pickups } = match;
+  for (let i = pickups.length - 1; i >= 0; i--) {
+    const pk = pickups[i];
+    pk.update(dt);
+    if (player.position.distanceTo(pk.mesh.position) < 1.3) {
+      if (pk.kind === 'weapon') {
+        const got = player.pickupWeapon(pk.payload);
+        if (got) hud.showToast(`Picked up ${RARITY_TIERS[pk.payload.rarity].name} ${pk.payload.name}`);
+        else {
+          player.addAmmo(pk.payload.ammoType, pk.payload.magSize);
+          hud.showToast('Weapon slots full — converted to ammo');
+        }
+      } else if (pk.kind === 'ammo') {
+        player.addAmmo(pk.payload.ammoType, pk.payload.amount);
+        hud.showToast(`+${pk.payload.amount} ammo`);
+      } else if (pk.kind === 'shield') {
+        player.shield = Math.min(player.maxShield, player.shield + pk.payload.amount);
+        hud.showToast(`+${pk.payload.amount} shield`);
+      }
+      scene.remove(pk.mesh);
+      pickups.splice(i, 1);
+    }
+  }
+}
+
+function updateCombatPhase(dt) {
+  const { player, bots, storm, stormVisual, buildSystem, combatSystem, terrain, characters, totalPlayers } = match;
+  if (player.isDead) return;
+
+  storm.update(dt);
+  stormVisual.wall.position.set(storm.center.x, 25, storm.center.y);
+  stormVisual.wall.scale.set(storm.radius, 1, storm.radius);
+  stormVisual.nextRing.position.set(storm.nextCenter.x, terrain.getHeightAt(storm.nextCenter.x, storm.nextCenter.y) + 0.3, storm.nextCenter.y);
+  stormVisual.nextRing.scale.set(storm.nextRadius, storm.nextRadius, 1);
+  stormVisual.nextRing.visible = storm.state === 'calm';
+
+  if (storm.isOutside(player.position.x, player.position.z)) {
+    player.applyStormDamage(storm.damagePerSecond, dt);
+  }
+
+  player.update(dt);
+  updateChestInteraction(dt);
+  updatePickups(dt);
+
+  for (const bot of bots) {
+    if (bot.isDead) continue;
+    bot.update(dt, characters);
+  }
+
+  for (let i = bots.length - 1; i >= 0; i--) {
+    const bot = bots[i];
+    if (!bot.isDead) continue;
+    const killer = bot.lastDamagedBy;
+    if (killer === player) {
+      player.kills++;
+      hud.addKillFeed(`You eliminated ${bot.name}`);
+    } else if (killer && killer.name) {
+      hud.addKillFeed(`${killer.name} eliminated ${bot.name}`);
+    } else {
+      hud.addKillFeed(`${bot.name} was eliminated by the storm`);
+    }
+    bot.remove();
+    bots.splice(i, 1);
+    const idx = characters.indexOf(bot);
+    if (idx >= 0) characters.splice(idx, 1);
+  }
+
+  combatSystem.update(dt);
+
+  hud.setHealthShield(player.health, player.maxHealth, player.shield, player.maxShield);
+  hud.setMaterials(player.inventory, buildSystem.tier);
+  hud.setWeaponSlots(player.weaponSlots, player.activeSlot);
+  hud.setBuildSlots(['wall', 'floor', 'ramp'], player.mode === 'build' ? player.buildType : null);
+  hud.setPlayersLeft(bots.length + 1);
+  if (storm.state === 'calm') hud.setStormTimer(`Storm closes in ${Math.ceil(storm.timeUntilShrink())}s`);
+  else if (storm.state === 'shrinking') hud.setStormTimer('Storm is closing!');
+  else hud.setStormTimer('Final circle');
+  hud.drawMinimap({ playerPos: player.position, mapRadius: terrain.radius, storm, safeRadius: storm.radius });
+
+  if (bots.length === 0 && !match.ended) {
+    match.phase = 'victory';
+    match.cinematic = {
+      t: 0, duration: 3.5,
+      center: player.position.clone(), startAngle: player.yaw, radius: 6.5,
+    };
+  }
+}
+
+// ---------------------------------------------------------------------
+// Victory Royale: freeze gameplay, slow orbiting camera, then the banner.
+// ---------------------------------------------------------------------
+function updateVictoryCinematic(dt) {
+  const c = match.cinematic;
+  c.t += dt * 0.4; // slow motion
+  const frac = Math.min(1, c.t / c.duration);
+  const angle = c.startAngle + frac * Math.PI * 1.2;
+  const cx = c.center.x + Math.sin(angle) * c.radius;
+  const cz = c.center.z + Math.cos(angle) * c.radius;
+  camera.position.set(cx, c.center.y + 2.8, cz);
+  camera.lookAt(c.center.x, c.center.y + 1.3, c.center.z);
+
+  if (frac >= 1 && !match.ended) {
+    match.ended = true;
+    endMatchTo(true, 1, match.totalPlayers);
+  }
+}
+
+// ---------------------------------------------------------------------
+// Main loop
+// ---------------------------------------------------------------------
 const clock = new THREE.Clock();
 
 function frame() {
@@ -185,83 +438,14 @@ function frame() {
     return;
   }
 
-  const { player, bots, storm, stormVisual, buildSystem, combatSystem, terrain, props, characters, totalPlayers } = match;
-
-  if (!player.isDead) {
-    storm.update(dt);
-    stormVisual.wall.position.set(storm.center.x, 25, storm.center.y);
-    stormVisual.wall.scale.set(storm.radius, 1, storm.radius);
-    stormVisual.nextRing.position.set(storm.nextCenter.x, terrain.getHeightAt(storm.nextCenter.x, storm.nextCenter.y) + 0.3, storm.nextCenter.y);
-    stormVisual.nextRing.scale.set(storm.nextRadius, storm.nextRadius, 1);
-    stormVisual.nextRing.visible = storm.state === 'calm';
-
-    if (storm.isOutside(player.position.x, player.position.z)) {
-      player.applyStormDamage(storm.damagePerSecond, dt);
-    }
-
-    player.update(dt);
-
-    let nearestChest = null, nearestDist = 2.4;
-    for (const chest of props.chests) {
-      if (chest.opened) continue;
-      const d = player.position.distanceTo(chest.mesh.position);
-      if (d < nearestDist) { nearestChest = chest; nearestDist = d; }
-    }
-    if (nearestChest) {
-      hud.setInteractHint('Press E to open supply chest');
-      if (input.wasPressed('KeyE')) {
-        nearestChest.open();
-        rollChestLoot(player, hud);
-      }
-    } else {
-      hud.setInteractHint(null);
-    }
-
-    for (const bot of bots) {
-      if (bot.isDead) continue;
-      bot.update(dt, characters);
-    }
-
-    for (let i = bots.length - 1; i >= 0; i--) {
-      const bot = bots[i];
-      if (!bot.isDead) continue;
-      const killer = bot.lastDamagedBy;
-      if (killer === player) {
-        player.kills++;
-        hud.addKillFeed(`You eliminated ${bot.name}`);
-      } else if (killer && killer.name) {
-        hud.addKillFeed(`${killer.name} eliminated ${bot.name}`);
-      } else {
-        hud.addKillFeed(`${bot.name} was eliminated by the storm`);
-      }
-      bot.remove();
-      bots.splice(i, 1);
-      const idx = characters.indexOf(bot);
-      if (idx >= 0) characters.splice(idx, 1);
-    }
-
-    combatSystem.update(dt);
-
-    hud.setHealthShield(player.health, player.maxHealth, player.shield, player.maxShield);
-    hud.setMaterials(player.inventory, buildSystem.tier);
-    hud.setWeaponSlots(player.weaponSlots, player.activeSlot);
-    hud.setBuildSlots(['wall', 'floor', 'ramp', 'roof'], player.mode === 'build' ? player.buildType : null);
-    hud.setPlayersLeft(bots.length + 1);
-    if (storm.state === 'calm') hud.setStormTimer(`Storm closes in ${Math.ceil(storm.timeUntilShrink())}s`);
-    else if (storm.state === 'shrinking') hud.setStormTimer('Storm is closing!');
-    else hud.setStormTimer('Final circle');
-    hud.drawMinimap({ playerPos: player.position, mapRadius: terrain.radius, storm, safeRadius: storm.radius });
-
-    editOverlay.setTarget(player.editMode ? player.editTarget?.piece ?? null : null);
-
-    if (bots.length === 0 && !match.ended) {
-      match.ended = true;
-      endMatchTo(true, 1, totalPlayers);
-    }
-
-    input.endFrame();
+  switch (match.phase) {
+    case 'lobby': updateLobbyPhase(dt); break;
+    case 'bus': updateBusPhase(dt); break;
+    case 'skydive': updateSkydivePhase(dt); break;
+    case 'combat': updateCombatPhase(dt); break;
+    case 'victory': updateVictoryCinematic(dt); break;
   }
-
+  input.endFrame();
   renderer.render(scene, camera);
 }
 

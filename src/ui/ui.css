@@ -126,23 +126,28 @@ button {
   background: rgba(255,255,255,0.85);
   box-shadow: 0 0 0 1px rgba(0,0,0,0.5);
 }
-.bar-group { position: absolute; left: 24px; bottom: 24px; width: 260px; }
-.bar { height: 16px; border-radius: 8px; background: rgba(10,14,22,0.6); overflow: hidden; margin-bottom: 6px; border: 1px solid rgba(255,255,255,0.12); }
+/* Bottom-center: health (green) + shield (blue) bars */
+.center-bars { position: absolute; left: 50%; bottom: 24px; transform: translateX(-50%); width: 300px; }
+.bar { height: 18px; border-radius: 8px; background: rgba(10,14,22,0.6); overflow: hidden; margin-bottom: 6px; border: 1px solid rgba(255,255,255,0.12); }
 .bar-fill { height: 100%; transition: width 0.15s ease; }
 .bar-fill.health { background: linear-gradient(90deg,#5cff7a,#2fd453); }
 .bar-fill.shield { background: linear-gradient(90deg,#53d8ff,#3b8bff); }
-.bar-label { font-size: 0.68rem; color: #cfe0f0; margin-bottom: 2px; letter-spacing: 0.04em; }
+.bar-label { font-size: 0.7rem; color: #cfe0f0; margin-bottom: 2px; letter-spacing: 0.05em; text-align: center; }
 
-.materials-row { position: absolute; left: 24px; bottom: 110px; display: flex; gap: 10px; }
-.mat-chip { display: flex; align-items: center; gap: 6px; background: rgba(10,14,22,0.6); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 5px 10px; font-size: 0.78rem; }
+/* Left side: 5-slot inventory dock (keys 1-5) */
+.inventory-dock {
+  position: absolute; left: 22px; top: 50%; transform: translateY(-50%);
+  display: flex; flex-direction: column; gap: 8px;
+}
+
+/* Right side: build pieces + material counters */
+.build-dock { position: absolute; right: 22px; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 14px; align-items: flex-end; }
+.build-hotbar { display: flex; flex-direction: column; gap: 8px; }
+.materials-row { display: flex; flex-direction: column; gap: 8px; }
+.mat-chip { display: flex; align-items: center; gap: 8px; background: rgba(10,14,22,0.6); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 6px 12px; font-size: 0.82rem; justify-content: flex-end; }
 .mat-chip.active { border-color: #ffd94a; box-shadow: 0 0 10px rgba(255,217,74,0.35); }
 .mat-swatch { width: 12px; height: 12px; border-radius: 3px; }
 
-.build-hotbar, .weapon-hotbar {
-  position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%);
-  display: flex; gap: 6px;
-}
-.build-hotbar { bottom: 150px; }
 .hotbar-slot {
   width: 54px; height: 54px; border-radius: 8px;
   background: rgba(10,14,22,0.65); border: 1px solid rgba(255,255,255,0.14);
@@ -152,11 +157,30 @@ button {
 .hotbar-slot .key { position: absolute; top: 2px; left: 4px; font-size: 0.6rem; color: #8fa2c0; }
 .hotbar-slot.active { border-color: #53d8ff; box-shadow: 0 0 10px rgba(83,216,255,0.5); }
 .hotbar-slot .ammo { position: absolute; bottom: 2px; right: 4px; font-size: 0.62rem; color: #ffd94a; }
-.hotbar-slot .icon { font-size: 1.3rem; }
+.hotbar-slot .icon { font-size: 1.1rem; }
 
-.right-panel { position: absolute; right: 24px; bottom: 24px; text-align: right; }
+.right-panel { position: absolute; right: 22px; top: 200px; text-align: right; }
 .players-left { font-size: 1.1rem; font-weight: 700; color: #ffd94a; }
 .storm-timer { font-size: 0.78rem; color: #9fb0c9; margin-top: 4px; }
+
+/* Lobby countdown / bus drop prompt (phase-specific, shown by main.js) */
+.lobby-countdown, .drop-prompt {
+  position: absolute; left: 50%; top: 38%; transform: translate(-50%, -50%);
+  font-size: 2.2rem; font-weight: 700; letter-spacing: 0.05em; text-align: center;
+  color: #eef2f5; text-shadow: 0 2px 12px rgba(0,0,0,0.6);
+  opacity: 0; transition: opacity 0.25s ease; pointer-events: none;
+}
+.lobby-countdown.show, .drop-prompt.show { opacity: 1; }
+.drop-prompt span { color: #ffd94a; }
+
+/* Hold-E chest progress bar */
+.chest-progress {
+  position: absolute; left: 50%; bottom: 250px; transform: translateX(-50%);
+  width: 180px; height: 10px; border-radius: 6px; background: rgba(10,14,22,0.7);
+  border: 1px solid rgba(255,255,255,0.2); overflow: hidden; opacity: 0; transition: opacity 0.15s ease;
+}
+.chest-progress.show { opacity: 1; }
+.chest-progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg,#ffd94a,#ff9d2f); }
 
 #minimap { position: absolute; top: 20px; right: 20px; width: 168px; height: 168px; border-radius: 10px; overflow: hidden; border: 2px solid rgba(255,255,255,0.2); background: #0f1522; }
 #minimap canvas { width: 100%; height: 100%; }
@@ -179,15 +203,14 @@ button {
 .interact-hint.show { opacity: 1; }
 
 /* ---------- Edit overlay ---------- */
-#edit-overlay { position: absolute; left: 50%; bottom: 150px; transform: translateX(-50%); display: none; flex-direction: column; align-items: center; gap: 10px; pointer-events: all; }
+#edit-overlay { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: none; flex-direction: column; align-items: center; gap: 12px; pointer-events: all; z-index: 50; }
 #edit-overlay.active { display: flex; }
-.edit-grid { display: grid; grid-template-columns: repeat(3, 44px); grid-template-rows: repeat(3, 44px); gap: 4px; background: rgba(10,14,22,0.75); padding: 8px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.2); }
-.edit-cell { background: #6fae52; border: 1px solid rgba(255,255,255,0.3); border-radius: 4px; cursor: pointer; }
-.edit-cell.open { background: rgba(255,255,255,0.06); }
-.edit-cell:hover { filter: brightness(1.2); }
-.edit-presets { display: flex; gap: 6px; }
-.edit-presets button { background: rgba(10,14,22,0.75); color: #eef2f5; border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; padding: 6px 12px; font-size: 0.75rem; }
-.edit-presets button:hover { border-color: #53d8ff; }
+.edit-title { font-size: 0.78rem; letter-spacing: 0.06em; color: #cfe8ff; background: rgba(6,10,18,0.8); padding: 6px 14px; border-radius: 6px; border: 1px solid rgba(83,216,255,0.4); }
+.edit-grid { display: grid; grid-template-columns: repeat(3, 56px); grid-template-rows: repeat(3, 56px); gap: 5px; background: rgba(6,10,18,0.85); padding: 10px; border-radius: 10px; border: 2px solid #2fa8ff; box-shadow: 0 0 30px rgba(47,168,255,0.35); }
+.edit-cell { background: #2fa8ff; border: 1px solid rgba(255,255,255,0.35); border-radius: 4px; cursor: pointer; transition: background 0.1s ease; }
+.edit-cell:hover { filter: brightness(1.25); }
+.edit-cell.marked { background: #8a93a0; }
+.edit-cell.open { background: rgba(255,255,255,0.05); cursor: default; }
 
 /* ---------- Game over ---------- */
 #gameover-screen { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; flex-direction: column; background: rgba(4,6,12,0.86); pointer-events: all; z-index: 200; }

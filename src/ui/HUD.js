@@ -1,4 +1,5 @@
 import { MATERIAL_TIERS } from '../building/BuildConfig.js';
+import { RARITY_TIERS } from '../combat/Rarity.js';
 
 const WEAPON_LABELS = {
   pickaxe: 'PICK',
@@ -9,7 +10,7 @@ const WEAPON_LABELS = {
   sniper: 'SNPR',
 };
 
-const BUILD_LABELS = { wall: 'WALL', floor: 'FLOOR', ramp: 'RAMP', roof: 'ROOF' };
+const BUILD_LABELS = { wall: 'WALL', floor: 'FLOOR', ramp: 'RAMP' };
 
 export class HUD {
   constructor(container) {
@@ -27,16 +28,22 @@ export class HUD {
       <div class="damage-vignette" id="dmg-vignette"></div>
       <div class="hit-marker" id="hit-marker"></div>
 
-      <div class="bar-group">
+      <!-- Bottom-center: health (green) + shield (blue) -->
+      <div class="center-bars">
         <div class="bar-label">HEALTH</div>
         <div class="bar"><div class="bar-fill health" id="bar-health" style="width:100%"></div></div>
         <div class="bar-label">SHIELD</div>
         <div class="bar"><div class="bar-fill shield" id="bar-shield" style="width:0%"></div></div>
       </div>
 
-      <div class="materials-row" id="materials-row"></div>
-      <div class="weapon-hotbar" id="weapon-hotbar"></div>
-      <div class="build-hotbar" id="build-hotbar"></div>
+      <!-- Left side: 5-slot inventory dock (keys 1-5) -->
+      <div class="inventory-dock" id="weapon-hotbar"></div>
+
+      <!-- Right side: build pieces + material counters -->
+      <div class="build-dock">
+        <div class="build-hotbar" id="build-hotbar"></div>
+        <div class="materials-row" id="materials-row"></div>
+      </div>
 
       <div class="right-panel">
         <div class="players-left" id="players-left">Players: 20</div>
@@ -47,6 +54,10 @@ export class HUD {
       <div class="kill-feed" id="kill-feed"></div>
       <div class="pickup-toast" id="pickup-toast"></div>
       <div class="interact-hint" id="interact-hint"></div>
+      <div class="chest-progress" id="chest-progress"><div class="chest-progress-fill" id="chest-progress-fill"></div></div>
+
+      <div class="lobby-countdown" id="lobby-countdown"></div>
+      <div class="drop-prompt" id="drop-prompt">Press <span>SPACEBAR</span> to Drop</div>
     `;
     this.container.appendChild(root);
     this.root = root;
@@ -65,6 +76,10 @@ export class HUD {
       dmgVignette: root.querySelector('#dmg-vignette'),
       pickupToast: root.querySelector('#pickup-toast'),
       interactHint: root.querySelector('#interact-hint'),
+      chestProgress: root.querySelector('#chest-progress'),
+      chestProgressFill: root.querySelector('#chest-progress-fill'),
+      lobbyCountdown: root.querySelector('#lobby-countdown'),
+      dropPrompt: root.querySelector('#drop-prompt'),
     };
     this.mmCtx = this.els.minimapCanvas.getContext('2d');
 
@@ -98,6 +113,11 @@ export class HUD {
       el.className = 'hotbar-slot' + (i === activeIndex ? ' active' : '');
       const label = slot ? WEAPON_LABELS[slot.id] : '';
       const ammo = slot && !slot.isPickaxe ? (slot.mag ?? 0) : '';
+      if (slot && slot.rarity && RARITY_TIERS[slot.rarity]) {
+        const color = RARITY_TIERS[slot.rarity].color.toString(16).padStart(6, '0');
+        el.style.borderColor = `#${color}`;
+        el.style.boxShadow = `0 0 10px #${color}80`;
+      }
       el.innerHTML = `<span class="key">${i + 1}</span><span class="icon">${label}</span>${slot && !slot.isPickaxe ? `<span class="ammo">${ammo}</span>` : ''}`;
       this.els.weaponBar.appendChild(el);
     });
@@ -142,6 +162,29 @@ export class HUD {
     }
     this.els.interactHint.textContent = text;
     this.els.interactHint.classList.add('show');
+  }
+
+  // fraction in [0,1], or null to hide the chest-opening progress bar.
+  setChestProgress(fraction) {
+    if (fraction == null) {
+      this.els.chestProgress.classList.remove('show');
+      return;
+    }
+    this.els.chestProgress.classList.add('show');
+    this.els.chestProgressFill.style.width = `${Math.round(fraction * 100)}%`;
+  }
+
+  setLobbyCountdown(seconds) {
+    if (seconds == null) {
+      this.els.lobbyCountdown.classList.remove('show');
+      return;
+    }
+    this.els.lobbyCountdown.classList.add('show');
+    this.els.lobbyCountdown.textContent = `Dropping in ${Math.ceil(seconds)}`;
+  }
+
+  setDropPromptVisible(visible) {
+    this.els.dropPrompt.classList.toggle('show', !!visible);
   }
 
   addKillFeed(text) {

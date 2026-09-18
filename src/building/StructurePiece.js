@@ -36,11 +36,11 @@ function buildRampGeometry(width, depth, height) {
 export class StructurePiece {
   constructor({ type, tier, ix, iy, iz, face = null, facing = 0 }) {
     this.id = pieceIdCounter++;
-    this.type = type; // 'wall' | 'floor' | 'ramp' | 'roof'
+    this.type = type; // 'wall' | 'floor' | 'ramp'
     this.tier = tier;
     this.ix = ix; this.iy = iy; this.iz = iz;
     this.face = face; // for walls: 'N'|'S'|'E'|'W'
-    this.facing = facing; // for ramps/roof: 0,90,180,270
+    this.facing = facing; // for ramps: 0,90,180,270
     this.maxHp = MATERIAL_TIERS[tier].hp;
     this.hp = this.maxHp;
     this.destroyed = false;
@@ -91,16 +91,6 @@ export class StructurePiece {
       mesh.userData.structurePiece = this;
       this.group.add(mesh);
       this.mainMesh = mesh;
-    } else if (this.type === 'roof') {
-      const geo = new THREE.ConeGeometry(TILE * 0.72, TILE * 0.85, 4);
-      geo.rotateY(Math.PI / 4);
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.position.y = -TILE / 2 + (TILE * 0.85) / 2;
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      mesh.userData.structurePiece = this;
-      this.group.add(mesh);
-      this.mainMesh = mesh;
     }
   }
 
@@ -122,7 +112,7 @@ export class StructurePiece {
       }
       this.group.position.set(cx + ox, baseY + half, cz + oz);
       this.group.rotation.y = rotY;
-    } else if (this.type === 'ramp' || this.type === 'roof') {
+    } else if (this.type === 'ramp') {
       this.group.position.set(cx, baseY, cz);
       this.group.rotation.y = THREE.MathUtils.degToRad(this.facing);
     }
@@ -146,14 +136,10 @@ export class StructurePiece {
     this.setSegmentOpen(idx, !this.openSegments.has(idx));
   }
 
-  applyPreset(preset) {
-    if (!this.editable) return;
-    const all = [0, 1, 2, 3, 4, 5, 6, 7, 8];
-    if (preset === 'full') all.forEach((i) => this.setSegmentOpen(i, false));
-    else if (preset === 'clear') all.forEach((i) => this.setSegmentOpen(i, true));
-    else if (preset === 'door') { all.forEach((i) => this.setSegmentOpen(i, false)); [1, 4].forEach((i) => this.setSegmentOpen(i, true)); }
-    else if (preset === 'window') { all.forEach((i) => this.setSegmentOpen(i, false)); [3, 4, 5].forEach((i) => this.setSegmentOpen(i, true)); }
-    else if (preset === 'hole') { all.forEach((i) => this.setSegmentOpen(i, false)); this.setSegmentOpen(4, true); }
+  // Commits a batch of marked segment indices as cleared (opened) at once —
+  // used when the player confirms an edit-mode selection.
+  clearSegments(indices) {
+    for (const idx of indices) this.setSegmentOpen(idx, true);
   }
 
   isSegmentSolid(idx) {

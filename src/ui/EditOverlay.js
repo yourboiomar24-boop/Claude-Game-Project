@@ -1,23 +1,24 @@
-// On-screen 3x3 segment editor for the structure piece currently targeted
-// while the player holds edit mode (F). Mirrors Fortnite-style piece
-// editing: click segments to toggle them open/closed, or use presets.
+// On-screen 3x3 segment editor. Opened by Player when 'F' targets a wall
+// or floor: the player is frozen and the mouse cursor is released so this
+// overlay can be clicked directly. Clicking a solid tile marks it grey
+// (pending removal); clicking it again un-marks it. Pressing 'F' a second
+// time (handled by Player) commits the marked tiles, which actually cuts
+// them out of the 3D mesh (a door/window), and closes the overlay.
 export class EditOverlay {
   constructor(container) {
     const root = document.createElement('div');
     root.id = 'edit-overlay';
     root.innerHTML = `
+      <div class="edit-title">EDITING — click tiles to mark, press F to cut</div>
       <div class="edit-grid" id="edit-grid"></div>
-      <div class="edit-presets">
-        <button data-preset="full">Full</button>
-        <button data-preset="window">Window</button>
-        <button data-preset="door">Door</button>
-        <button data-preset="clear">Clear</button>
-      </div>
     `;
     container.appendChild(root);
     this.root = root;
     this.grid = root.querySelector('#edit-grid');
     this.cells = [];
+    this.piece = null;
+    this.marked = new Set();
+
     // Build top-to-bottom visually (row2=top .. row0=bottom) but keep
     // segment indices row-major bottom-to-top to match StructurePiece.
     for (let visualRow = 0; visualRow < 3; visualRow++) {
@@ -27,49 +28,42 @@ export class EditOverlay {
         const cell = document.createElement('div');
         cell.className = 'edit-cell';
         cell.dataset.idx = String(idx);
-        cell.addEventListener('click', () => {
-          if (this.piece) {
-            this.piece.toggleSegment(idx);
-            this._refresh();
-          }
-        });
+        cell.addEventListener('click', () => this._onCellClick(idx));
         this.grid.appendChild(cell);
         this.cells.push(cell);
       }
     }
-    root.querySelectorAll('.edit-presets button').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        if (this.piece) {
-          this.piece.applyPreset(btn.dataset.preset);
-          this._refresh();
-        }
-      });
-    });
-
-    this.piece = null;
   }
 
-  setTarget(piece) {
-    if (this.piece === piece) {
-      if (piece) this._refresh();
-      return;
-    }
-    this.piece = piece;
+  _onCellClick(idx) {
+    if (!this.piece || !this.piece.isSegmentSolid(idx)) return; // already open — nothing to mark
+    if (this.marked.has(idx)) this.marked.delete(idx);
+    else this.marked.add(idx);
     this._refresh();
   }
 
-  _refresh() {
-    const active = !!this.piece;
-    this.root.classList.toggle('active', active);
-    if (!active) return;
-    for (const cell of this.cells) {
-      const idx = parseInt(cell.dataset.idx, 10);
-      cell.classList.toggle('open', !this.piece.isSegmentSolid(idx));
-    }
+  open(piece) {
+    this.piece = piece;
+    this.marked.clear();
+    this.root.classList.add('active');
+    this._refresh();
   }
 
-  hide() {
+  // Cuts the marked tiles out of the piece's mesh and hides the overlay.
+  commit(piece) {
+    if (piece && this.marked.size) piece.clearSegments([...this.marked]);
+    this.marked.clear();
     this.piece = null;
     this.root.classList.remove('active');
+  }
+
+  _refresh() {
+    if (!this.piece) return;
+    for (const cell of this.cells) {
+      const idx = parseInt(cell.dataset.idx, 10);
+      const open = !this.piece.isSegmentSolid(idx);
+      cell.classList.toggle('open', open);
+      cell.classList.toggle('marked', !open ? false : this.marked.has(idx));
+    }
   }
 }

@@ -23,10 +23,11 @@ export class BuildSystem {
   constructor(scene, terrain) {
     this.scene = scene;
     this.terrain = terrain;
-    this.pieceType = 'wall'; // wall | floor | ramp | roof
+    this.pieceType = 'wall'; // wall | floor | ramp
     this.tier = 'wood';
     this.pieces = new Map(); // gridKey -> StructurePiece
     this.pieceList = [];
+    this.cellOccupancy = new Map(); // "ix,iy,iz" -> count of pieces in that cell
     this._collisionDirty = true;
     this._wallBoxesCache = [];
 
@@ -51,7 +52,6 @@ export class BuildSystem {
       wall: new THREE.Mesh(new THREE.BoxGeometry(TILE, TILE, 0.3), validMat),
       floor: new THREE.Mesh(new THREE.BoxGeometry(TILE, 0.3, TILE), validMat),
       ramp: new THREE.Mesh(new THREE.BoxGeometry(TILE, TILE, TILE), validMat),
-      roof: new THREE.Mesh(new THREE.ConeGeometry(TILE * 0.72, TILE * 0.85, 4), validMat),
     };
     for (const key of Object.keys(this.ghostShapes)) {
       const m = this.ghostShapes[key];
@@ -135,7 +135,6 @@ export class BuildSystem {
     } else {
       mesh.position.set(cx, baseY, cz);
       mesh.rotation.set(0, THREE.MathUtils.degToRad(facing), 0);
-      if (this.pieceType === 'roof') mesh.position.y = baseY;
     }
 
     const valid = this._isValidTarget(this.currentTarget);
@@ -148,10 +147,36 @@ export class BuildSystem {
     return `${type}:${t.ix},${t.iy},${t.iz}`;
   }
 
+  _cellKey(ix, iy, iz) {
+    return `${ix},${iy},${iz}`;
+  }
+
+  _hasPieceInCell(ix, iy, iz) {
+    return (this.cellOccupancy.get(this._cellKey(ix, iy, iz)) || 0) > 0;
+  }
+
+  // A placement is only allowed if it rests on the terrain or touches an
+  // already-placed piece — no arbitrary floating structures.
+  _isGrounded(t) {
+    const cx = t.ix * TILE, cz = t.iz * TILE;
+    const groundY = this.terrain.getHeightAt(cx, cz);
+    const baseY = t.iy * TILE;
+    if (baseY <= groundY + TILE * 0.6 && baseY >= groundY - TILE * 1.5) return true;
+
+    const neighbors = [
+      [t.ix, t.iy - 1, t.iz], [t.ix, t.iy + 1, t.iz],
+      [t.ix - 1, t.iy, t.iz], [t.ix + 1, t.iy, t.iz],
+      [t.ix, t.iy, t.iz - 1], [t.ix, t.iy, t.iz + 1],
+      [t.ix, t.iy, t.iz],
+    ];
+    return neighbors.some(([ix, iy, iz]) => this._hasPieceInCell(ix, iy, iz));
+  }
+
   _isValidTarget(t) {
     if (!t) return false;
     const key = this._keyFor(this.pieceType, t);
     if (this.pieces.has(key)) return false;
+    if (!this._isGrounded(t)) return false;
     return true;
   }
 
@@ -181,6 +206,8 @@ export class BuildSystem {
     this.scene.add(piece.group);
     this.pieces.set(piece.gridKey(), piece);
     this.pieceList.push(piece);
+    const ck = this._cellKey(piece.ix, piece.iy, piece.iz);
+    this.cellOccupancy.set(ck, (this.cellOccupancy.get(ck) || 0) + 1);
     this._collisionDirty = true;
     if (this.onPiecePlaced) this.onPiecePlaced(piece);
     return piece;
@@ -192,6 +219,9 @@ export class BuildSystem {
     this.pieces.delete(piece.gridKey());
     const idx = this.pieceList.indexOf(piece);
     if (idx >= 0) this.pieceList.splice(idx, 1);
+    const ck = this._cellKey(piece.ix, piece.iy, piece.iz);
+    const count = (this.cellOccupancy.get(ck) || 1) - 1;
+    if (count <= 0) this.cellOccupancy.delete(ck); else this.cellOccupancy.set(ck, count);
     this._collisionDirty = true;
     if (this.onPieceDestroyed) this.onPieceDestroyed(piece);
   }

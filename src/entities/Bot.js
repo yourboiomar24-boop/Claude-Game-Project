@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { buildCharacterModel } from './CharacterModel.js';
-import { WEAPONS, rollLootWeapon } from '../combat/Weapons.js';
+import { rollLootItem, createWeaponInstance } from '../combat/Weapons.js';
 import { mulberry32 } from '../utils/Noise.js';
 
 const SPEED = 4.4;
@@ -49,9 +49,9 @@ export class Bot {
     this.maxShield = 100;
     this.isDead = false;
 
-    const weaponId = rollLootWeapon(rand);
-    const def = WEAPONS[weaponId];
-    this.weapon = { ...def, mag: def.magSize, reserve: def.magSize * 3 };
+    const { weaponId, rarity } = rollLootItem(rand);
+    this.weapon = createWeaponInstance(weaponId, rarity);
+    this.weapon.reserve = this.weapon.magSize * 3;
 
     this.state = 'roam';
     this.roamTarget = null;
@@ -79,9 +79,29 @@ export class Bot {
     return [parts.head.children[0], parts.torso];
   }
 
-  spawnAt(x, z) {
-    const y = this.world.buildSystem.getSupportCandidates(x, z).reduce((a, b) => Math.max(a, b), -Infinity);
-    this.position.set(x, y, z);
+  // Simplified autonomous skydive so bots visibly drop from the bus too,
+  // without needing real freefall/glider physics or AI during that phase.
+  startDrop(startPos, terrain, rand) {
+    const ang = rand() * Math.PI * 2;
+    const dist = rand() * terrain.radius * 0.8;
+    const lx = Math.cos(ang) * dist, lz = Math.sin(ang) * dist;
+    this._dropStart = startPos.clone();
+    this._dropEnd = new THREE.Vector3(lx, terrain.getHeightAt(lx, lz), lz);
+    this._dropT = 0;
+    this._dropDuration = 13 + rand() * 6;
+    this.position.copy(this._dropStart);
+  }
+
+  // Returns true once landed.
+  updateDrop(dt) {
+    this._dropT = Math.min(1, this._dropT + dt / this._dropDuration);
+    const eased = this._dropT < 0.5 ? 2 * this._dropT * this._dropT : 1 - Math.pow(-2 * this._dropT + 2, 2) / 2;
+    this.position.lerpVectors(this._dropStart, this._dropEnd, eased);
+    const dir = this._dropEnd.clone().sub(this._dropStart);
+    if (dir.lengthSq() > 0.001) this.yaw = Math.atan2(dir.x, dir.z);
+    this.mesh.position.copy(this.position);
+    this.mesh.rotation.y = this.yaw;
+    return this._dropT >= 1;
   }
 
   takeDamage(amount, meta = {}) {

@@ -66,6 +66,8 @@ export class Player {
     this.onKillFeed = null;
     this.onDeath = null;
     this.onFire = null;
+    this.onEditEnter = null; // (piece) => void — called when edit mode opens
+    this.onEditExit = null; // (piece) => void — called on commit, before clearing target
 
     this.mesh = buildCharacterModel(skin);
     this.mesh.visible = true; // third-person: player sees their own body
@@ -89,10 +91,42 @@ export class Player {
     return [parts.head.children[0], parts.torso];
   }
 
-  spawnAt(x, z) {
-    const y = this.world.buildSystem.getSupportCandidates(x, z).reduce((a, b) => Math.max(a, b), -Infinity);
+  setPosition(x, y, z) {
     this.position.set(x, y, z);
-    this.velocity.set(0, 0, 0);
+    this.mesh.position.copy(this.position);
+  }
+
+  // Thin passthroughs so phase managers (lobby/bus/skydive) can reuse the
+  // player's own look/camera code without duplicating it.
+  applyLook(dt) { this._handleLook(dt); }
+  refreshCamera() { this._updateCamera(); }
+  syncMeshToPosition() {
+    this.mesh.position.copy(this.position);
+    this.mesh.rotation.y = this.yaw;
+  }
+
+  // Phase 1 (lobby): free look + flat-ground walking only — no weapons,
+  // no building, no damage.
+  updateLobby(dt, lobbyManager) {
+    this._handleLook(dt);
+    const input = this.input;
+    _fwd.set(Math.sin(this.yaw), 0, Math.cos(this.yaw));
+    _right.set(_fwd.z, 0, -_fwd.x);
+    _move.set(0, 0, 0);
+    if (input.isDown('KeyW')) _move.add(_fwd);
+    if (input.isDown('KeyS')) _move.sub(_fwd);
+    if (input.isDown('KeyD')) _move.add(_right);
+    if (input.isDown('KeyA')) _move.sub(_right);
+    if (_move.lengthSq() > 0) _move.normalize();
+    this.position.addScaledVector(_move, WALK_SPEED * dt);
+    this.position.y = lobbyManager.getSurfaceY();
+    lobbyManager.clampPosition(this.position);
+    this._speed2D = _move.length() * WALK_SPEED;
+    this._moving = _move.lengthSq() > 0;
+    this._sprinting = false;
+    this.syncMeshToPosition();
+    this._animate(dt);
+    this._updateCamera();
   }
 
   currentWeapon() {
@@ -121,16 +155,17 @@ export class Player {
     this.inventory[type] = Math.min(500, (this.inventory[type] || 0) + amount);
   }
 
-  pickupWeapon(weaponId) {
-    const def = WEAPONS[weaponId];
+  // Accepts a concrete weapon instance (see createWeaponInstance) so the
+  // rolled rarity's damage/spread come along with the pickup.
+  pickupWeapon(weaponInstance) {
     const emptyIdx = this.weaponSlots.findIndex((s, i) => i > 0 && !s);
-    const dupIdx = this.weaponSlots.findIndex((s) => s && s.id === weaponId);
+    const dupIdx = this.weaponSlots.findIndex((s) => s && s.id === weaponInstance.id);
     if (dupIdx > 0) {
-      this.weaponSlots[dupIdx].reserve = Math.min(999, this.weaponSlots[dupIdx].reserve + def.magSize * 2);
+      this.weaponSlots[dupIdx].reserve = Math.min(999, this.weaponSlots[dupIdx].reserve + weaponInstance.magSize * 2);
       return true;
     }
     if (emptyIdx === -1) return false;
-    this.weaponSlots[emptyIdx] = { ...def, mag: def.magSize, reserve: def.magSize * 2 };
+    this.weaponSlots[emptyIdx] = weaponInstance;
     return true;
   }
 
@@ -156,6 +191,7 @@ export class Player {
   }
 
   _handleLook(dt) {
+    if (this.editMode) return; // orientation frozen while editing a piece
     const dx = this.input.mouseDelta.x;
     const dy = this.input.mouseDelta.y;
     this.yaw -= dx * MOUSE_SENS;
@@ -166,24 +202,41 @@ export class Player {
   _handleHotkeys() {
     const input = this.input;
     if (this.editMode) {
-      if (input.wasPressed('Digit1')) this.editTarget?.piece.applyPreset('full');
-      if (input.wasPressed('Digit2')) this.editTarget?.piece.applyPreset('window');
-      if (input.wasPressed('Digit3')) this.editTarget?.piece.applyPreset('door');
-      if (input.wasPressed('Digit4')) this.editTarget?.piece.applyPreset('clear');
-    } else {
-      if (input.wasPressed('Digit1')) this.selectSlot(0);
-      if (input.wasPressed('Digit2')) this.selectSlot(1);
-      if (input.wasPressed('Digit3')) this.selectSlot(2);
-      if (input.wasPressed('Digit4')) this.selectSlot(3);
-      if (input.wasPressed('Digit5')) this.selectSlot(4);
-      if (input.wasPressed('Digit6')) this.selectBuild('wall');
-      if (input.wasPressed('Digit7')) this.selectBuild('floor');
-      if (input.wasPressed('Digit8')) this.selectBuild('ramp');
-      if (input.wasPressed('Digit9')) this.selectBuild('roof');
+      if (input.wasPressed('KeyF')) this._exitEditMode();
+      return;
     }
+
+    if (input.wasPressed('Digit1')) this.selectSlot(0);
+    if (input.wasPressed('Digit2')) this.selectSlot(1);
+    if (input.wasPressed('Digit3')) this.selectSlot(2);
+    if (input.wasPressed('Digit4')) this.selectSlot(3);
+    if (input.wasPressed('Digit5')) this.selectSlot(4);
+    if (input.wasPressed('Digit6')) this.selectBuild('wall');
+    if (input.wasPressed('Digit7')) this.selectBuild('floor');
+    if (input.wasPressed('Digit8')) this.selectBuild('ramp');
     if (input.wasPressed('KeyT')) this.world.buildSystem.cycleTier();
-    if (input.wasPressed('KeyF')) this.editMode = !this.editMode;
     if (input.wasPressed('KeyR') && this.mode === 'combat') this._startReload();
+
+    if (input.wasPressed('KeyF')) {
+      const target = this.world.buildSystem.raycastEditable(this.camera, 9);
+      if (target) this._enterEditMode(target);
+    }
+  }
+
+  _enterEditMode(target) {
+    this.editMode = true;
+    this.editTarget = target;
+    this.velocity.set(0, this.velocity.y, 0);
+    document.exitPointerLock?.();
+    if (this.onEditEnter) this.onEditEnter(target.piece);
+  }
+
+  _exitEditMode() {
+    const piece = this.editTarget?.piece;
+    if (this.onEditExit) this.onEditExit(piece);
+    this.editMode = false;
+    this.editTarget = null;
+    this.input.dom.requestPointerLock?.();
   }
 
   _startReload() {
@@ -195,6 +248,14 @@ export class Player {
   }
 
   _handleMovement(dt) {
+    if (this.editMode) {
+      this.velocity.x = 0;
+      this.velocity.z = 0;
+      this._speed2D = 0;
+      this._moving = false;
+      this._sprinting = false;
+      return;
+    }
     const input = this.input;
     _fwd.set(Math.sin(this.yaw), 0, Math.cos(this.yaw));
     _right.set(_fwd.z, 0, -_fwd.x);
@@ -335,14 +396,9 @@ export class Player {
       }
     }
 
-    this._aiming = this.input.mouseButtons.has(2) && this.mode === 'combat';
+    if (this.editMode) return; // all actions frozen; the edit overlay handles its own clicks
 
-    if (this.editMode) {
-      if (this.input.wasMousePressed(0) && this.editTarget) {
-        this.editTarget.piece.toggleSegment(this.editTarget.segIndex);
-      }
-      return;
-    }
+    this._aiming = this.input.mouseButtons.has(2) && this.mode === 'combat';
 
     const firing = this.input.mouseButtons.has(0);
     const firingEdge = this.input.wasMousePressed(0);
@@ -433,12 +489,6 @@ export class Player {
     this._animate(dt);
 
     this.world.buildSystem.updateGhost(this.camera, this.mode === 'build' && !this.editMode);
-
-    if (this.editMode) {
-      this.editTarget = this.world.buildSystem.raycastEditable(this.camera, 9);
-    } else {
-      this.editTarget = null;
-    }
 
     this._handleFire(dt);
     this._updateCamera();
